@@ -3,7 +3,8 @@ import Array "mo:base/Array";
 import Order "mo:base/Order";
 import Int "mo:base/Int";
 import HashMap "mo:base/HashMap";
-
+import Hash "mo:base/Hash";
+import Iter "mo:base/Iter";
 module {
     public func filter<T>(xs:[var T] , t : T,f:(T,T)->Bool) : [var T]{
         let ys : Buffer.Buffer<T> = Buffer.Buffer(xs.size());
@@ -72,10 +73,8 @@ module {
     };
 
     ///数组转map
-    public func arrayToMap<(K,V)>(
-        array : [(K,V)] , 
-        keyEq : (K,K) -> Bool, 
-        keyHash : K -> Hash.Hash) : HashMap.HashMap<K,V>{
+    public func arrayToMap<K,V> (array : [(K,V)] , keyEq : (K,K) -> Bool, keyHash : K -> Hash.Hash) : HashMap.HashMap<K,V>{
         return HashMap.fromIter<K,V>(array.vals(), 1, keyEq, keyHash);
     };
+
 }

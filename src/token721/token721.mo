@@ -1,9 +1,11 @@
 import Utils "utils";
-import Principal "mo:base/Pricipal";
+import Principal "mo:base/Principal";
 import HashMap "mo:base/HashMap";
 import Nat "mo:base/Nat";
 import Bool "mo:base/Bool";
 import Option "mo:base/Option";
+import Hash "mo:base/Hash";
+import Array "mo:base/Array";
 
 actor class Token(){
 
@@ -13,10 +15,13 @@ actor class Token(){
     };
 
     type TokenId = Nat;
+    func token_hash(tokenId : TokenId) : Hash.Hash{
+        Hash.hash(tokenId);
+    };
     ///mapping from nft to owner 
-    private var nftToOwner = HashMap.HashMap<TokenId,Principal>(1,TokenId.equal,TokenId.hash);
+    private var nftToOwner = HashMap.HashMap<TokenId,Principal>(1,Nat.equal,token_hash);
     ///mapping from nft to approced principal
-    private var nftToApproval = HashMap.HashMap<TokenId,Principal>(1,TokenId.equal,TokenId.hash);
+    private var nftToApproval = HashMap.HashMap<TokenId,Principal>(1,Nat.equal,token_hash);
     private var ownerToOperators = HashMap.HashMap<Principal,HashMap.HashMap<Principal,Bool>>(1,Principal.equal,Principal.hash);
     ///mapping from owner to their token count
     private var ownerToNftCount = HashMap.HashMap<Principal,Nat>(1,Principal.equal,Principal.hash);
@@ -38,30 +43,38 @@ actor class Token(){
         Option.unwrap(nftToOwner.get(tokenId));
     };
 
-    public shared(msg) func safeTransferFrom(from : Principal , to : Principal , tokenId : TokenId, data : ?[Text]) : async () {
+    public shared(msg) func safeTransferFrom(from : Principal , to : Principal , tokenId : TokenId) : async Bool{
         _canTransfer(msg.caller,from,to,tokenId);
-        _transfer(from.to,tokenId);
+        _transfer(from,to,tokenId);
+        true;
     };
 
     public shared(msg) func transferFrom(from : Principal , to : Principal , tokenId : TokenId) : async Bool{
         _canTransfer(msg.caller,from,to,tokenId);
         _transfer(from,to,tokenId);
+        true;
     };
     
-    public shared(msg) func approve(approved : Principal : tokenId : TokenId) : async Bool{
+    public shared(msg) func approve(approved : Principal , tokenId : TokenId) : async Bool{
         _canOperate(msg.caller,tokenId);
         nftToApproval.put(tokenId,approved);
+        true;
     };
 
-    public shared(msg) func setApprovalForAll(_operator : Principal , approve : Bool) : async (){
+    public shared(msg) func setApprovalForAll(_operator : Principal , approve : Bool) : async Bool{
        switch(ownerToOperators.get(msg.caller)){
-           case (?approvedOperators){
-                ownerToOperators.put(msg.caller,approvedOperators.put(_operator,approve));
+           case (?approvedOperator){
+                approvedOperator.put(_operator,approve);
+                ownerToOperators.put(msg.caller,approvedOperator);
+                return true;
            };
            case _ {
                let approvedOperator = HashMap.HashMap<Principal,Bool>(1,Principal.equal,Principal.hash);
-               ownerToOperators.put(msg.caller,approvedOperator.put(_operator,approve));
+               approvedOperator.put(_operator,approve);
+               ownerToOperators.put(msg.caller,approvedOperator);
+               return true;
            };
+           
        }
     };
 
@@ -70,23 +83,30 @@ actor class Token(){
         return Option.unwrap(nftToApproval.get(tokenId));
     };
 
-    public shared(msg) func isApprovedForAll(owner : Principal, _operator : Principal) : aysnc Bool {
+    public shared(msg) func isApprovedForAll(owner : Principal, _operator : Principal) : async Bool {
         let approvedOperators = Option.unwrap(ownerToOperators.get(owner));
-        let approved = Option.unwrap(approvedOperators.get(_operator));
-        approved;
+        switch (approvedOperators.get(_operator)){
+            case (?approced){
+                approced
+            };
+            case _ {return false};
+        }
     };
     
     //swap 功能
     public shared(msg) func mint(to: Principal, tokenId : TokenId): async Bool {
-        assert(msg.caller == Option.unwrap(nftToOwner(tokenId)));
+        let tokenOwner = Option.unwrap(nftToOwner.get(tokenId));
+        assert(msg.caller == tokenOwner);
         assert( to != msg.caller);
         _addNftToken(to,tokenId);
+        true;
     };
 
-    public shared(msg) func burn(from: Principal, tokenId : TokenId): async Bool {
+    public shared(msg) func burn(from: Principal, tokenId : TokenId) : async Bool {
         let tokenOwner = Option.unwrap(nftToOwner.get(tokenId));
         _clearApproval(tokenId);
         _removeNftToken(tokenOwner,tokenId);
+        true;
     };
 
     //TODO 如何铸币 ????????????????
@@ -96,7 +116,7 @@ actor class Token(){
         let tokenOwner = Option.unwrap(nftToOwner.get(tokenId));
         let approver = Option.unwrap(nftToApproval.get(tokenId));
         let approvedOperators = Option.unwrap(ownerToOperators.get(tokenOwner));
-        let approved : Bool = Option.unwrap(approvedOperators.get(tokenId));
+        let approved : Bool = Option.unwrap(approvedOperators.get(caller));
         ///必须是转向其他人
         assert (from == tokenOwner and from != to);
         ///token所有者/被授权者/被授权的机构  "NOT_OWNER_APPROVED_OR_OPERATOR"
@@ -104,17 +124,17 @@ actor class Token(){
     };
 
     ///token所有者或者被授权者可以操作
-    private func _canOperate(caller : Principal , tokenId : TokenId) : Bool {
+    private func _canOperate(caller : Principal , tokenId : TokenId) {
         let tokenOwner = Option.unwrap(nftToOwner.get(tokenId));
         let approvedOperators = Option.unwrap(ownerToOperators.get(tokenOwner));
-        let approved : Bool = Option.unwrap(approvedOperators.get(tokenId));
+        let approved : Bool = Option.unwrap(approvedOperators.get(caller));
         assert (tokenOwner == caller or true == approved);
     };
 
     private func _transfer(from : Principal , to : Principal , tokenId : TokenId){
         let tokenOwner = Option.unwrap(nftToOwner.get(tokenId));
         assert(from == tokenOwner);
-        _clearApproval(from);
+        _clearApproval(tokenId);
         _removeNftToken(from,tokenId);
         _addNftToken(to,tokenId);
     };
@@ -129,11 +149,11 @@ actor class Token(){
     };
 
     private func _removeNftToken(owner : Principal , tokenId : TokenId){
-        switch (ownerToNftCount.get(from),nftToOwner.get(tokenId),tokens.get(from)){
+        switch (ownerToNftCount.get(owner),nftToOwner.get(tokenId),tokens.get(owner)){
             case (?count,?owner,?tokenIds){
-                ownerToNftCount.put(from,count -1);
+                ownerToNftCount.put(owner,count -1);
                 nftToOwner.delete(tokenId);
-                tokenIds := Utils.filter(tokenIds,tokenId,TokenId.equal);
+                tokens.put(owner,Utils.filter(tokenIds,tokenId,Nat.equal));
             };
             case _ {};
         };
@@ -151,12 +171,11 @@ actor class Token(){
         nftToOwner.put(tokenId,to);
         switch(tokens.get(to)){
             case (?tokenIds){
-                tokenIds = Array.thaw(Array.append(Array.freeze(tokenIds),[tokenId]));
-                tokens.put(to,tokenIds);
+                tokens.put(to,Array.thaw(Array.append(Array.freeze(tokenIds),Array.make(tokenId))));
             };
             case _ {
-                tokenIds = Array.thaw(Array.make(tokenId));
-                tokens.put(to,tokenIds);
+                let tokenIdss = Array.thaw<TokenId>(Array.make<TokenId>(tokenId));
+                tokens.put(to,tokenIdss);
             };
         }
     };

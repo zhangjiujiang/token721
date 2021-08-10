@@ -1,7 +1,7 @@
 {
   "canisters": {
     "token721": {
-      "main": "src/token721/main.mo",
+      "main": "src/token721/token721.mo",
       "type": "motoko"
     },
     "token721_assets": {
